@@ -196,7 +196,14 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 		return resp
 	}
 
-	clickRejectCookiesIfRequired(page)
+	if strings.Contains(page.URL(), "consent.google") {
+		if err := handleConsentAndWait(ctx, page); err != nil {
+			resp.Error = err
+			return resp
+		}
+	} else {
+		clickRejectCookiesIfRequired(page)
+	}
 
 	const defaultTimeout = 5 * time.Second
 
@@ -260,6 +267,42 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 	return resp
 }
 
+func handleConsentAndWait(ctx context.Context, page scrapemate.BrowserPage) error {
+	// Wait for consent form buttons to appear in the DOM
+	_ = page.WaitForSelector(`button`, 5*time.Second)
+
+	_, _ = page.Eval(`() => {
+		const consentForm = document.querySelector('form[action*="consent.google"]');
+		if (consentForm) {
+			const btn = consentForm.querySelector('button, input[type="submit"]');
+			if (btn) { btn.click(); return true; }
+		}
+		const buttons = document.querySelectorAll('button, input[type="submit"]');
+		for (const btn of buttons) {
+			const text = (btn.textContent || btn.value || '').toLowerCase();
+			if (text.includes('reject') || text.includes('decline') || text.includes('ablehnen') ||
+				text.includes('accept') || text.includes('agree') || text.includes('i agree')) {
+				btn.click();
+				return true;
+			}
+		}
+		return false;
+	}`)
+
+	// Wait for navigation away from the consent page back to Google Maps
+	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if !waitUntilURLContains(waitCtx, page, "google.com/maps") {
+		return fmt.Errorf("timed out waiting for consent page to redirect to Google Maps")
+	}
+
+	// Give Maps a moment to initialise after the redirect
+	page.WaitForTimeout(2 * time.Second)
+
+	return nil
+}
+
 func waitUntilURLContains(ctx context.Context, page scrapemate.BrowserPage, s string) bool {
 	ticker := time.NewTicker(time.Millisecond * 150)
 	defer ticker.Stop()
@@ -277,22 +320,17 @@ func waitUntilURLContains(ctx context.Context, page scrapemate.BrowserPage, s st
 }
 
 func clickRejectCookiesIfRequired(page scrapemate.BrowserPage) {
-	// Use JavaScript to find and click - faster than multiple locator calls
 	_, _ = page.Eval(`() => {
-		// Try consent form buttons first
 		const consentForm = document.querySelector('form[action*="consent.google"]');
 		if (consentForm) {
 			const btn = consentForm.querySelector('button, input[type="submit"]');
-			if (btn) {
-				btn.click();
-				return true;
-			}
+			if (btn) { btn.click(); return true; }
 		}
-		// Try reject/decline buttons
 		const buttons = document.querySelectorAll('button, input[type="submit"]');
 		for (const btn of buttons) {
 			const text = (btn.textContent || btn.value || '').toLowerCase();
-			if (text.includes('reject') || text.includes('decline') || text.includes('ablehnen')) {
+			if (text.includes('reject') || text.includes('decline') || text.includes('ablehnen') ||
+				text.includes('accept') || text.includes('agree') || text.includes('i agree')) {
 				btn.click();
 				return true;
 			}

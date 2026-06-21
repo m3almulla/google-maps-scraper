@@ -2,6 +2,8 @@ module github.com/gosom/google-maps-scraper
 
 go 1.26.3
 
+replace github.com/gosom/scrapemate => C:\Users\MOI\go-patches\scrapemate
+
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/aws/aws-lambda-go v1.48.0
